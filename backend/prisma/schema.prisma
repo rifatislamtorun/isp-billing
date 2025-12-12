@@ -1,0 +1,377 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ISP_ADMIN
+  ACCOUNTANT
+  SUPPORT_STAFF
+  NETWORK_ENGINEER
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING
+  DISCONNECTED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PARTIAL_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOBILE_BANKING
+  CREDIT_CARD
+  STRIPE
+  SSLCOMMERZ
+  PAYPAL
+}
+
+model User {
+  id                String         @id @default(uuid())
+  email             String         @unique
+  password          String
+  name              String
+  phone             String?
+  avatar            String?
+  role              UserRole       @default(ISP_ADMIN)
+  isActive          Boolean        @default(true)
+  lastLogin         DateTime?
+  notificationToken String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  
+  // Relations
+  createdCustomers  Customer[]
+  assignedTickets   SupportTicket[]
+  activityLogs      ActivityLog[]
+  
+  @@index([email, role])
+}
+
+model ISP {
+  id               String    @id @default(uuid())
+  name             String
+  logo             String?
+  address          String
+  phone            String
+  email            String
+  website          String?
+  taxId            String?
+  currency         String    @default("BDT")
+  timezone         String    @default("Asia/Dhaka")
+  settings         Json      @default("{}")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  packages         Package[]
+  customers        Customer[]
+  routers          Router[]
+  invoices         Invoice[]
+  paymentGateways  PaymentGateway[]
+}
+
+model Customer {
+  id              String         @id @default(uuid())
+  customerId      String         @unique
+  name            String
+  email           String         @unique
+  phone           String
+  alternativePhone String?
+  nid             String?
+  address         String
+  connectionAddress String
+  latitude        Float?
+  longitude       Float?
+  password        String
+  profilePhoto    String?
+  status          CustomerStatus @default(PENDING)
+  balance         Float          @default(0)
+  creditLimit     Float          @default(0)
+  registrationDate DateTime      @default(now())
+  connectionDate  DateTime?
+  disconnectDate  DateTime?
+  
+  // Foreign Keys
+  packageId       String
+  routerId        String?
+  createdById     String
+  ispId           String
+  
+  // Relations
+  package         Package        @relation(fields: [packageId], references: [id])
+  router          Router?        @relation(fields: [routerId], references: [id])
+  createdBy       User           @relation(fields: [createdById], references: [id])
+  isp             ISP            @relation(fields: [ispId], references: [id])
+  invoices        Invoice[]
+  payments        Payment[]
+  bandwidthUsage  BandwidthUsage[]
+  supportTickets  SupportTicket[]
+  notifications   Notification[]
+  devices         CustomerDevice[]
+  
+  @@index([customerId, email, phone, status])
+}
+
+model Package {
+  id               String    @id @default(uuid())
+  name             String
+  code             String    @unique
+  speed            String    // e.g., "10 Mbps"
+  bandwidth        String    // e.g., "Unlimited" or "500 GB"
+  price            Float
+  setupFee         Float     @default(0)
+  taxRate          Float     @default(0)
+  isActive         Boolean   @default(true)
+  features         String[]
+  description      String?
+  
+  // Foreign Keys
+  ispId            String
+  
+  // Relations
+  isp              ISP       @relation(fields: [ispId], references: [id])
+  customers        Customer[]
+  
+  @@index([code, isActive])
+}
+
+model Router {
+  id               String    @id @default(uuid())
+  name             String
+  ipAddress        String    @unique
+  macAddress       String    @unique
+  model            String
+  location         String
+  latitude         Float?
+  longitude        Float?
+  status           String    @default("ACTIVE") // ACTIVE, MAINTENANCE, DOWN
+  bandwidthLimit   Float     // Total bandwidth in Mbps
+  connectedUsers   Int       @default(0)
+  lastSeen         DateTime?
+  
+  // Foreign Keys
+  ispId            String
+  
+  // Relations
+  isp              ISP       @relation(fields: [ispId], references: [id])
+  customers        Customer[]
+  bandwidthLogs    RouterBandwidthLog[]
+  
+  @@index([ipAddress, status])
+}
+
+model Invoice {
+  id               String        @id @default(uuid())
+  invoiceNumber    String        @unique
+  customerId       String
+  month            String        // e.g., "2023-11"
+  issueDate        DateTime      @default(now())
+  dueDate          DateTime
+  amount           Float
+  tax              Float         @default(0)
+  discount         Float         @default(0)
+  totalAmount      Float
+  paidAmount       Float         @default(0)
+  dueAmount        Float
+  status           InvoiceStatus @default(PENDING)
+  notes            String?
+  pdfUrl           String?
+  
+  // Breakdown
+  packageCharge    Float
+  usageCharge      Float         @default(0)
+  lateFee          Float         @default(0)
+  vat              Float         @default(0)
+  others           Float         @default(0)
+  
+  // Relations
+  customer         Customer      @relation(fields: [customerId], references: [id])
+  isp              ISP           @relation(fields: [ispId], references: [id])
+  payments         Payment[]
+  items            InvoiceItem[]
+  
+  // Foreign Keys
+  ispId            String
+  
+  @@index([invoiceNumber, customerId, status, month])
+}
+
+model InvoiceItem {
+  id               String    @id @default(uuid())
+  invoiceId        String
+  description      String
+  quantity         Float     @default(1)
+  unitPrice        Float
+  total            Float
+  
+  // Relations
+  invoice          Invoice   @relation(fields: [invoiceId], references: [id])
+}
+
+model Payment {
+  id               String        @id @default(uuid())
+  transactionId    String        @unique
+  invoiceId        String
+  customerId       String
+  amount           Float
+  method           PaymentMethod
+  status           String        @default("COMPLETED") // PENDING, COMPLETED, FAILED
+  reference        String?
+  paidAt           DateTime      @default(now())
+  receivedBy       String?
+  notes            String?
+  
+  // Relations
+  invoice          Invoice       @relation(fields: [invoiceId], references: [id])
+  customer         Customer      @relation(fields: [customerId], references: [id])
+  
+  @@index([transactionId, invoiceId, customerId, paidAt])
+}
+
+model BandwidthUsage {
+  id               String    @id @default(uuid())
+  customerId       String
+  date             DateTime  @default(now())
+  upload           Float     @default(0) // in MB
+  download         Float     @default(0) // in MB
+  total            Float     @default(0) // in MB
+  peakUsage        Float     @default(0) // in Mbps
+  
+  // Relations
+  customer         Customer  @relation(fields: [customerId], references: [id])
+  
+  @@index([customerId, date])
+}
+
+model SupportTicket {
+  id               String    @id @default(uuid())
+  ticketNumber     String    @unique
+  customerId       String
+  subject          String
+  description      String
+  priority         String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  status           String    @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  category         String    // BILLING, TECHNICAL, COMPLAINT, GENERAL
+  assignedToId     String?
+  
+  // Relations
+  customer         Customer  @relation(fields: [customerId], references: [id])
+  assignedTo       User?     @relation(fields: [assignedToId], references: [id])
+  replies          TicketReply[]
+  
+  @@index([ticketNumber, customerId, status, priority])
+}
+
+model TicketReply {
+  id               String    @id @default(uuid())
+  ticketId         String
+  userId           String?
+  customerId       String?
+  message          String
+  attachments      String[]
+  isInternalNote   Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  
+  // Relations
+  ticket           SupportTicket @relation(fields: [ticketId], references: [id])
+  user             User?     @relation(fields: [userId], references: [id])
+  customer         Customer? @relation(fields: [customerId], references: [id])
+}
+
+model Notification {
+  id               String    @id @default(uuid())
+  userId           String?
+  customerId       String?
+  title            String
+  message          String
+  type             String    // INFO, SUCCESS, WARNING, ERROR
+  isRead           Boolean   @default(false)
+  actionUrl        String?
+  createdAt        DateTime  @default(now())
+  
+  // Relations
+  user             User?     @relation(fields: [userId], references: [id])
+  customer         Customer? @relation(fields: [customerId], references: [id])
+}
+
+model ActivityLog {
+  id               String    @id @default(uuid())
+  userId           String
+  action           String
+  entityType       String
+  entityId         String?
+  details          Json
+  ipAddress        String?
+  userAgent        String?
+  createdAt        DateTime  @default(now())
+  
+  // Relations
+  user             User      @relation(fields: [userId], references: [id])
+}
+
+model CustomerDevice {
+  id               String    @id @default(uuid())
+  customerId       String
+  macAddress       String    @unique
+  deviceName       String
+  deviceType       String
+  ipAddress        String?
+  lastSeen         DateTime?
+  isActive         Boolean   @default(true)
+  
+  // Relations
+  customer         Customer  @relation(fields: [customerId], references: [id])
+}
+
+model RouterBandwidthLog {
+  id               String    @id @default(uuid())
+  routerId         String
+  timestamp        DateTime  @default(now())
+  totalUsage       Float
+  connectedDevices Int
+  
+  // Relations
+  router           Router    @relation(fields: [routerId], references: [id])
+}
+
+model PaymentGateway {
+  id               String    @id @default(uuid())
+  ispId            String
+  name             String    // STRIPE, SSLCOMMERZ, etc
+  credentials      Json
+  isActive         Boolean   @default(true)
+  testMode         Boolean   @default(true)
+  
+  // Relations
+  isp              ISP       @relation(fields: [ispId], references: [id])
+}
+
+model SMSLog {
+  id               String    @id @default(uuid())
+  customerId       String
+  phone            String
+  message          String
+  status           String    // SENT, FAILED, DELIVERED
+  response         String?
+  sentAt           DateTime  @default(now())
+  
+  // Relations
+  customer         Customer? @relation(fields: [customerId], references: [id])
+}

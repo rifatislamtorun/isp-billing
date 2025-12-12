@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: isp_postgres
+    environment:
+      POSTGRES_DB: isp_billing
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: SecurePassword123!
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - isp_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: isp_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - isp_network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: isp_backend
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://admin:SecurePassword123!@postgres:5432/isp_billing
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-this
+      CLIENT_URL: https://your-domain.com
+      PORT: 5000
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/logs:/app/logs
+    networks:
+      - isp_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: isp_frontend
+    environment:
+      VITE_API_URL: https://api.your-domain.com
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - isp_network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: isp_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - isp_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  isp_network:
+    driver: bridge
